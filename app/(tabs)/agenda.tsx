@@ -533,7 +533,7 @@ export default function AgendaScreen() {
                 placeholder="HH:MM (ex: 14:30)"
                 value={selectedTime}
                 onChangeText={setSelectedTime}
-                keyboardType="numbers-and-punctuation"
+                keyboardType="numeric"
               />
             </View>
 
