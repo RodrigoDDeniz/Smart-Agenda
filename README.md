@@ -912,3 +912,5 @@ Transformando a gestão de barbearias com tecnologia e inovação
 Uso não autorizado, cópia, modificação ou distribuição são estritamente proibidos.
 
 </div>
+#   S m a r t - A g e n d a  
+ 
