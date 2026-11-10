@@ -41,7 +41,7 @@ export default function RelatoriosScreen() {
     const now = new Date();
     switch (selectedPeriod) {
       case 'semanal':
-        return { start: startOfWeek(now, { locale: ptBR }), end: endOfWeek(now, { locale: ptBR }) };
+        return { start: startOfWeek(now, { locale: ptBR, weekStartsOn: 0 }), end: endOfWeek(now, { locale: ptBR, weekStartsOn: 0 }) };
       case 'mensal':
         return { start: startOfMonth(now), end: endOfMonth(now) };
       case 'semestral':

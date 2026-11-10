@@ -19,7 +19,25 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { Appointment, Client, Service, Barber } from '@/types/database';
 import colors from '@/constants/colors';
-import { Calendar, ChevronLeft, ChevronRight, Plus, X, Search, Menu, Home, BarChart3, CalendarCheck, Sparkles, Users as UsersIcon, ShoppingCart, FileText, FolderOpen, UserCircle, LogOut, ChevronRight as ChevronRightIcon } from 'lucide-react-native';
+import { 
+  Calendar, 
+  ChevronLeft, 
+  ChevronRight, 
+  Plus, 
+  X, 
+  Menu, 
+  Home, 
+  CalendarCheck, 
+  Sparkles, 
+  Users as UsersIcon, 
+  ShoppingCart, 
+  FileText, 
+  FolderOpen, 
+  UserCircle, 
+  LogOut, 
+  ChevronRight as ChevronRightIcon,
+  Database
+} from 'lucide-react-native';
 import { format, addDays, startOfDay, endOfDay } from 'date-fns';
 import { useRouter } from 'expo-router';
 import { ptBR } from 'date-fns/locale';
@@ -65,7 +83,6 @@ export default function AgendaScreen() {
         throw error;
       }
 
-      console.log('[Agenda] Loaded appointments:', data?.length);
       return data as Appointment[];
     },
     enabled: !!user?.tenant_id,
@@ -190,6 +207,26 @@ export default function AgendaScreen() {
     },
   });
 
+  const updateAppointmentStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .update({ status })
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appointments'] });
+    },
+    onError: (error: Error) => {
+      Alert.alert('Erro', 'Não foi possível atualizar o agendamento: ' + error.message);
+    },
+  });
+
   const handleNewAppointment = () => {
     resetForm();
     setShowModal(true);
@@ -230,6 +267,38 @@ export default function AgendaScreen() {
     setSelectedBarber(null);
     setSelectedTime('');
     setNotes('');
+  };
+
+  // Máscara Inteligente de Horário
+  const handleTimeChange = (text: string) => {
+    // 1. Remove letras e caracteres especiais
+    let val = text.replace(/\D/g, '');
+    
+    // 2. Limita a 4 dígitos totais
+    val = val.substring(0, 4);
+
+    // 3. Valida as Horas (não pode ser maior que 23)
+    if (val.length >= 2) {
+      let hours = parseInt(val.substring(0, 2), 10);
+      if (hours > 23) {
+        val = '23' + val.substring(2); // Se for 24 ou mais, força para 23
+      }
+    }
+
+    // 4. Valida os Minutos (a dezena do minuto não pode ser maior que 5, ex: 59)
+    if (val.length >= 3) {
+      let firstMinuteDigit = parseInt(val.substring(2, 3), 10);
+      if (firstMinuteDigit > 5) {
+        val = val.substring(0, 2) + '5' + val.substring(3); // Força a dezena a ser 5 no máximo
+      }
+    }
+
+    // 5. Aplica a máscara com os dois pontos
+    if (val.length >= 3) {
+      setSelectedTime(`${val.substring(0, 2)}:${val.substring(2)}`);
+    } else {
+      setSelectedTime(val);
+    }
   };
 
   return (
@@ -275,6 +344,16 @@ export default function AgendaScreen() {
               <Text style={styles.menuItemText}>Dashboard (Início)</Text>
               <ChevronRightIcon size={18} color={colors.textSecondary} />
             </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={() => navigateAndCloseMenu('/(tabs)')}>
+              <CalendarCheck size={22} color='#3B82F6' strokeWidth={2} />
+              <Text style={styles.menuItemText}>Agenda de Compromisso</Text>
+              <ChevronRightIcon size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={() => navigateAndCloseMenu('/(tabs)')}>
+              <Sparkles size={22} color='#8B5CF6' strokeWidth={2} />
+              <Text style={styles.menuItemText}>IA Insights</Text>
+              <ChevronRightIcon size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={() => navigateAndCloseMenu('/clientes/gerenciar')}>
               <UsersIcon size={22} color='#10B981' strokeWidth={2} />
               <Text style={styles.menuItemText}>Gerenciar Clientes</Text>
@@ -312,6 +391,16 @@ export default function AgendaScreen() {
 
           <View style={styles.menuSection}>
             <Text style={styles.menuSectionTitle}>Conta</Text>
+            <TouchableOpacity style={styles.menuItem} onPress={() => navigateAndCloseMenu('/backup')}>
+              <Database size={22} color='#F59E0B' strokeWidth={2} />
+              <Text style={styles.menuItemText}>Backup de Dados</Text>
+              <ChevronRightIcon size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={() => navigateAndCloseMenu('/perfil')}>
+              <UserCircle size={22} color={colors.primary} strokeWidth={2} />
+              <Text style={styles.menuItemText}>Perfil (Gerenciar)</Text>
+              <ChevronRightIcon size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
             <TouchableOpacity style={[styles.menuItem, styles.menuItemDanger]} onPress={() => navigateAndCloseMenu('logout')}>
               <LogOut size={22} color={colors.error} strokeWidth={2} />
               <Text style={[styles.menuItemText, styles.menuItemTextDanger]}>Sair</Text>
@@ -366,7 +455,72 @@ export default function AgendaScreen() {
         {appointments && appointments.length > 0 ? (
           <View style={styles.appointmentsList}>
             {appointments.map((appointment) => (
-              <View key={appointment.id} style={styles.appointmentCard}>
+              <TouchableOpacity 
+                key={appointment.id} 
+                style={styles.appointmentCard}
+                onPress={() => {
+                  Alert.alert(
+                    'Gerenciar Agendamento',
+                    `${appointment.client?.name || 'Cliente'}\n${appointment.service?.name}`,
+                    [
+                      { 
+                        text: 'Cobrar / Finalizar', 
+                        onPress: () => {
+                          Alert.alert(
+                            'Finalizar Atendimento',
+                            'Deseja concluir este agendamento e ir para o caixa?',
+                            [
+                              { text: 'Ainda não', style: 'cancel' },
+                              { 
+                                text: 'Sim, concluir e cobrar', 
+                                onPress: () => {
+                                  updateAppointmentStatusMutation.mutate({ 
+                                    id: appointment.id, 
+                                    status: 'completed' 
+                                  });
+                                  
+                                  router.push({
+                                    pathname: '/vendas',
+                                    params: {
+                                      autoOpen: 'true',
+                                      clientId: appointment.client_id,
+                                      serviceId: appointment.service_id
+                                    }
+                                  });
+                                }
+                              }
+                            ]
+                          );
+                        } 
+                      },
+                      { 
+                        text: 'Cancelar Agendamento', 
+                        onPress: () => {
+                          Alert.alert(
+                            'Confirmar',
+                            'Tem certeza que deseja cancelar este agendamento?',
+                            [
+                              { text: 'Não', style: 'cancel' },
+                              { 
+                                text: 'Sim, cancelar', 
+                                onPress: () => updateAppointmentStatusMutation.mutate({ 
+                                  id: appointment.id, 
+                                  status: 'cancelled' 
+                                }) 
+                              }
+                            ]
+                          );
+                        },
+                        style: 'destructive'
+                      },
+                      { 
+                        text: 'Fechar', 
+                        style: 'cancel' 
+                      }
+                    ]
+                  );
+                }}
+              >
                 <View
                   style={[styles.statusBar, { backgroundColor: getStatusColor(appointment.status) }]}
                 />
@@ -406,7 +560,7 @@ export default function AgendaScreen() {
                     </Text>
                   )}
                 </View>
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
         ) : (
@@ -532,8 +686,9 @@ export default function AgendaScreen() {
                 style={styles.input}
                 placeholder="HH:MM (ex: 14:30)"
                 value={selectedTime}
-                onChangeText={setSelectedTime}
-                keyboardType="numeric"
+                onChangeText={handleTimeChange}
+                keyboardType="number-pad"
+                maxLength={5}
               />
             </View>
 

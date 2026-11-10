@@ -1066,7 +1066,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 14,           // >= fontSize
     color: colors.textSecondary,
-    includeFontPadding: false // reduz padding extra no Android
+    includeFontPadding: false, // reduz padding extra no Android
     fontWeight: '500' as const,
   },
   statLabelLight: {

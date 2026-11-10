@@ -1,3 +1,6 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import React, { useState } from 'react';
 import {
   View,
@@ -20,6 +23,7 @@ import {
   AlertCircle,
   X,
   Check,
+  Trash2,
 } from 'lucide-react-native';
 
 type Produto = {
@@ -28,12 +32,17 @@ type Produto = {
   preco: number;
   estoque: number;
   estoqueMinimo: number;
-  categoria?: string;
+  category_id?: string;
+  categoria_nome?: string;
+  categoria_cor?: string;
   ativo: boolean;
 };
 
 export default function ProdutosScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [editingProduto, setEditingProduto] = useState<Produto | null>(null);
@@ -43,61 +52,150 @@ export default function ProdutosScreen() {
     preco: '',
     estoque: '',
     estoqueMinimo: '',
-    categoria: '',
+    category_id: '',
   });
 
-  const [produtos] = useState<Produto[]>([
-    {
-      id: '1',
-      nome: 'Pomada Modeladora',
-      preco: 45.0,
-      estoque: 25,
-      estoqueMinimo: 10,
-      categoria: 'Finalizadores',
-      ativo: true,
+  // 1. Busca as Categorias (Apenas do tipo 'produto')
+  const { data: categorias = [] } = useQuery({
+    queryKey: ['categories-produto', user?.tenant_id],
+    queryFn: async () => {
+      if (!user?.tenant_id) return [];
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id, name, color')
+        .eq('tenant_id', user.tenant_id)
+        .eq('type', 'produto')
+        .order('name');
+      if (error) throw error;
+      return data;
     },
-    {
-      id: '2',
-      nome: 'Cera para Cabelo',
-      preco: 38.0,
-      estoque: 15,
-      estoqueMinimo: 10,
-      categoria: 'Finalizadores',
-      ativo: true,
-    },
-    {
-      id: '3',
-      nome: 'Óleo para Barba',
-      preco: 55.0,
-      estoque: 8,
-      estoqueMinimo: 10,
-      categoria: 'Barba',
-      ativo: true,
-    },
-    {
-      id: '4',
-      nome: 'Shampoo Anticaspa',
-      preco: 32.0,
-      estoque: 30,
-      estoqueMinimo: 15,
-      categoria: 'Higiene',
-      ativo: true,
-    },
-    {
-      id: '5',
-      nome: 'Gel Fixador',
-      preco: 28.0,
-      estoque: 5,
-      estoqueMinimo: 10,
-      categoria: 'Finalizadores',
-      ativo: true,
-    },
-  ]);
+    enabled: !!user?.tenant_id,
+  });
 
-  const filteredProdutos = produtos.filter((produto) =>
-    produto.nome.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    produto.categoria?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // 2. Busca os Produtos já com a relação da Categoria
+  const { data: produtos = [], isLoading } = useQuery({
+    queryKey: ['products', user?.tenant_id],
+    queryFn: async () => {
+      if (!user?.tenant_id) return [];
+      
+      const { data, error } = await supabase
+        .from('products')
+        .select('*, categories(id, name, color)')
+        .eq('tenant_id', user.tenant_id)
+        .order('name', { ascending: true });
+
+      if (error) throw error;
+      
+      return data.map((p: any) => ({
+        id: p.id,
+        nome: p.name,
+        preco: Number(p.price),
+        estoque: p.stock_quantity,
+        estoqueMinimo: p.low_stock_alert || 0,
+        category_id: p.category_id || '',
+        categoria_nome: p.categories?.name || '',
+        categoria_cor: p.categories?.color || colors.primary,
+        ativo: p.is_active,
+      })) as Produto[];
+    },
+    enabled: !!user?.tenant_id,
+  });
+
+  // 3. Filtra os produtos com proteção
+  const filteredProdutos = produtos.filter((produto) => {
+    const nomeSeguro = produto.nome || '';
+    const categoriaSegura = produto.categoria_nome || '';
+    const buscaSegura = searchQuery.toLowerCase();
+
+    return (
+      nomeSeguro.toLowerCase().includes(buscaSegura) ||
+      categoriaSegura.toLowerCase().includes(buscaSegura)
+    );
+  });
+
+  // 4. Salva na base de dados
+  const saveProdutoMutation = useMutation({
+    mutationFn: async () => {
+      if (
+        !formData.nome ||
+        !formData.preco ||
+        !formData.estoque ||
+        !formData.estoqueMinimo
+      ) {
+        throw new Error('Nome, preço, estoque e estoque mínimo são obrigatórios');
+      }
+
+      const productData = {
+        tenant_id: user?.tenant_id,
+        name: formData.nome,
+        price: parseFloat(formData.preco.replace(',', '.')),
+        stock_quantity: parseInt(formData.estoque, 10),
+        low_stock_alert: parseInt(formData.estoqueMinimo, 10),
+        category_id: formData.category_id || null,
+        is_active: true,
+      };
+
+      if (editingProduto) {
+        const { error } = await supabase
+          .from('products')
+          .update(productData)
+          .eq('id', editingProduto.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('products')
+          .insert(productData);
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['categories'] }); // Atualiza a contagem nas categorias!
+      Alert.alert('Sucesso', 'Produto salvo com sucesso!');
+      handleCloseModal();
+    },
+    onError: (error: Error) => {
+      Alert.alert('Erro ao salvar', error.message);
+    }
+  });
+
+  // 5. Exclui da base de dados
+  const deleteProdutoMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from('products')
+        .delete()
+        .eq('id', id);
+      
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['categories'] });
+      Alert.alert('Sucesso', 'Produto excluído!');
+      handleCloseModal();
+    },
+    onError: (error: Error) => {
+      Alert.alert('Erro ao excluir', error.message);
+    }
+  });
+
+  const confirmDelete = () => {
+    if (!editingProduto) return;
+    
+    Alert.alert(
+      'Excluir Produto',
+      `Tem certeza que deseja excluir "${editingProduto.nome}"? Esta ação não pode ser desfeita.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Excluir', 
+          style: 'destructive', 
+          onPress: () => deleteProdutoMutation.mutate(editingProduto.id) 
+        }
+      ]
+    );
+  };
 
   const handleOpenModal = (produto?: Produto) => {
     if (produto) {
@@ -107,7 +205,7 @@ export default function ProdutosScreen() {
         preco: produto.preco.toString(),
         estoque: produto.estoque.toString(),
         estoqueMinimo: produto.estoqueMinimo.toString(),
-        categoria: produto.categoria || '',
+        category_id: produto.category_id || '',
       });
     } else {
       setEditingProduto(null);
@@ -116,7 +214,7 @@ export default function ProdutosScreen() {
         preco: '',
         estoque: '',
         estoqueMinimo: '',
-        categoria: '',
+        category_id: '',
       });
     }
     setModalVisible(true);
@@ -130,25 +228,12 @@ export default function ProdutosScreen() {
       preco: '',
       estoque: '',
       estoqueMinimo: '',
-      categoria: '',
+      category_id: '',
     });
   };
 
   const handleSave = () => {
-    if (
-      !formData.nome ||
-      !formData.preco ||
-      !formData.estoque ||
-      !formData.estoqueMinimo
-    ) {
-      Alert.alert(
-        'Erro',
-        'Nome, preço, estoque e estoque mínimo são obrigatórios'
-      );
-      return;
-    }
-    Alert.alert('Sucesso', 'Produto salvo com sucesso!');
-    handleCloseModal();
+    saveProdutoMutation.mutate();
   };
 
   return (
@@ -185,20 +270,20 @@ export default function ProdutosScreen() {
                   activeOpacity={0.7}
                 >
                   <View style={styles.produtoHeader}>
-                    <View style={styles.produtoIcon}>
+                    <View style={[styles.produtoIcon, { backgroundColor: `${produto.categoria_cor || colors.accent}15` }]}>
                       <Package
                         size={24}
-                        color={colors.accent}
+                        color={produto.categoria_cor || colors.accent}
                         strokeWidth={2}
                       />
                     </View>
                     <View style={styles.produtoInfo}>
                       <Text style={styles.produtoName}>{produto.nome}</Text>
-                      {produto.categoria && (
-                        <Text style={styles.produtoCategory}>
-                          {produto.categoria}
+                      {produto.categoria_nome ? (
+                        <Text style={[styles.produtoCategory, { color: produto.categoria_cor }]}>
+                          • {produto.categoria_nome}
                         </Text>
-                      )}
+                      ) : null}
                     </View>
                     {isLowStock && (
                       <View style={styles.lowStockBadge}>
@@ -269,6 +354,33 @@ export default function ProdutosScreen() {
               </View>
 
               <ScrollView style={styles.formContainer}>
+                
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Categoria</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
+                    {categorias.map((cat: any) => {
+                      const isSelected = formData.category_id === cat.id;
+                      return (
+                        <TouchableOpacity
+                          key={cat.id}
+                          style={[
+                            styles.categoryChip,
+                            isSelected && { backgroundColor: cat.color, borderColor: cat.color }
+                          ]}
+                          onPress={() => setFormData({ ...formData, category_id: isSelected ? '' : cat.id })}
+                        >
+                          <Text style={[
+                            styles.categoryChipText,
+                            isSelected && { color: colors.surface }
+                          ]}>
+                            {cat.name}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Nome *</Text>
                   <TextInput
@@ -278,19 +390,6 @@ export default function ProdutosScreen() {
                     value={formData.nome}
                     onChangeText={(text) =>
                       setFormData({ ...formData, nome: text })
-                    }
-                  />
-                </View>
-
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Categoria</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Ex: Finalizadores, Barba, Higiene"
-                    placeholderTextColor={colors.textSecondary}
-                    value={formData.categoria}
-                    onChangeText={(text) =>
-                      setFormData({ ...formData, categoria: text })
                     }
                   />
                 </View>
@@ -350,6 +449,17 @@ export default function ProdutosScreen() {
                 >
                   <Text style={styles.cancelButtonText}>Cancelar</Text>
                 </TouchableOpacity>
+
+                {editingProduto && (
+                  <TouchableOpacity
+                    style={[styles.cancelButton, { flex: 0, width: 48, borderColor: colors.error, backgroundColor: `${colors.error}10` }]}
+                    onPress={confirmDelete}
+                    activeOpacity={0.7}
+                  >
+                    <Trash2 size={20} color={colors.error} />
+                  </TouchableOpacity>
+                )}
+
                 <TouchableOpacity
                   style={styles.saveButton}
                   onPress={handleSave}
@@ -367,214 +477,42 @@ export default function ProdutosScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    padding: 16,
-    gap: 12,
-    backgroundColor: colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  searchBox: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    height: 48,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: colors.text,
-  },
-  addButton: {
-    width: 48,
-    height: 48,
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  produtosList: {
-    padding: 16,
-    gap: 12,
-  },
-  produtoCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: 12,
-  },
-  produtoHeader: {
-    flexDirection: 'row',
-    gap: 12,
-    alignItems: 'center',
-  },
-  produtoIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: `${colors.accent}15`,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  produtoInfo: {
-    flex: 1,
-    justifyContent: 'center',
-    gap: 4,
-  },
-  produtoName: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: colors.text,
-  },
-  produtoCategory: {
-    fontSize: 14,
-    color: colors.textSecondary,
-  },
-  lowStockBadge: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: `${colors.error}15`,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  produtoDetails: {
-    flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 12,
-  },
-  detailItem: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  detailValue: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: colors.text,
-  },
-  detailDivider: {
-    width: 1,
-    backgroundColor: colors.border,
-  },
-  lowStockWarning: {
-    backgroundColor: `${colors.error}10`,
-    borderRadius: 8,
-    padding: 10,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.error,
-  },
-  lowStockText: {
-    fontSize: 13,
-    color: colors.error,
-    fontWeight: '500' as const,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '90%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700' as const,
-    color: colors.text,
-  },
-  closeButton: {
-    padding: 4,
-  },
-  formContainer: {
-    padding: 20,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '600' as const,
-    color: colors.text,
-    marginBottom: 8,
-  },
-  input: {
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 16,
-    color: colors.text,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    padding: 20,
-    gap: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  cancelButton: {
-    flex: 1,
-    height: 48,
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  cancelButtonText: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: colors.text,
-  },
-  saveButton: {
-    flex: 1,
-    height: 48,
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-  saveButtonText: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: colors.surface,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
+  searchContainer: { flexDirection: 'row', padding: 16, gap: 12, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background, borderRadius: 12, paddingHorizontal: 12, height: 48, gap: 8, borderWidth: 1, borderColor: colors.border },
+  searchInput: { flex: 1, fontSize: 16, color: colors.text },
+  addButton: { width: 48, height: 48, backgroundColor: colors.primary, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  scrollView: { flex: 1 },
+  produtosList: { padding: 16, gap: 12 },
+  produtoCard: { backgroundColor: colors.surface, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: colors.border, gap: 12 },
+  produtoHeader: { flexDirection: 'row', gap: 12, alignItems: 'center' },
+  produtoIcon: { width: 50, height: 50, borderRadius: 25, justifyContent: 'center', alignItems: 'center' },
+  produtoInfo: { flex: 1, justifyContent: 'center', gap: 4 },
+  produtoName: { fontSize: 16, fontWeight: '600', color: colors.text },
+  produtoCategory: { fontSize: 13, fontWeight: '500' },
+  lowStockBadge: { width: 32, height: 32, borderRadius: 16, backgroundColor: `${colors.error}15`, justifyContent: 'center', alignItems: 'center' },
+  produtoDetails: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12 },
+  detailItem: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  detailValue: { fontSize: 16, fontWeight: '600', color: colors.text },
+  detailDivider: { width: 1, backgroundColor: colors.border },
+  lowStockWarning: { backgroundColor: `${colors.error}10`, borderRadius: 8, padding: 10, borderLeftWidth: 3, borderLeftColor: colors.error },
+  lowStockText: { fontSize: 13, color: colors.error, fontWeight: '500' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: colors.border },
+  modalTitle: { fontSize: 20, fontWeight: '700', color: colors.text },
+  closeButton: { padding: 4 },
+  formContainer: { padding: 20 },
+  categoryScroll: { gap: 8, paddingBottom: 8 },
+  categoryChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.background },
+  categoryChipText: { fontSize: 14, fontWeight: '500', color: colors.textSecondary },
+  inputGroup: { marginBottom: 20 },
+  inputRow: { flexDirection: 'row', gap: 12 },
+  inputLabel: { fontSize: 14, fontWeight: '600', color: colors.text, marginBottom: 8 },
+  input: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 14, fontSize: 16, color: colors.text },
+  modalActions: { flexDirection: 'row', padding: 20, gap: 12, borderTopWidth: 1, borderTopColor: colors.border },
+  cancelButton: { flex: 1, height: 48, backgroundColor: colors.background, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.border },
+  cancelButtonText: { fontSize: 16, fontWeight: '600', color: colors.text },
+  saveButton: { flex: 1, height: 48, backgroundColor: colors.primary, borderRadius: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 },
+  saveButtonText: { fontSize: 16, fontWeight: '600', color: colors.surface },
 });

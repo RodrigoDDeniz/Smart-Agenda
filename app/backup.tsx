@@ -22,7 +22,6 @@ import {
   Download,
   Upload,
   HardDrive,
-  Clock,
   CheckCircle,
   AlertCircle,
   X,
@@ -62,6 +61,11 @@ interface BackupData {
     sales: any[];
     sale_items: any[];
     payments: any[];
+    // Novas tabelas adicionadas ao backup
+    business_hours: any[];
+    payment_methods: any[];
+    categories: any[];
+    suppliers: any[];
   };
 }
 
@@ -119,6 +123,10 @@ export default function BackupScreen() {
         salesData,
         saleItemsData,
         paymentsData,
+        businessHoursData,
+        paymentMethodsData,
+        categoriesData,
+        suppliersData
       ] = await Promise.all([
         supabase.from('clients').select('*').eq('tenant_id', user.tenant_id),
         supabase.from('services').select('*').eq('tenant_id', user.tenant_id),
@@ -128,17 +136,18 @@ export default function BackupScreen() {
         supabase.from('sales').select('*').eq('tenant_id', user.tenant_id),
         supabase.from('sale_items').select('*').eq('tenant_id', user.tenant_id),
         supabase.from('payments').select('*').eq('tenant_id', user.tenant_id),
+        // Buscando as novas configurações
+        supabase.from('business_hours').select('*').eq('tenant_id', user.tenant_id),
+        supabase.from('payment_methods').select('*').eq('tenant_id', user.tenant_id),
+        supabase.from('categories').select('*').eq('tenant_id', user.tenant_id),
+        supabase.from('suppliers').select('*').eq('tenant_id', user.tenant_id),
       ]);
 
       const errors = [
-        clientsData.error,
-        servicesData.error,
-        productsData.error,
-        barbersData.error,
-        appointmentsData.error,
-        salesData.error,
-        saleItemsData.error,
-        paymentsData.error,
+        clientsData.error, servicesData.error, productsData.error,
+        barbersData.error, appointmentsData.error, salesData.error,
+        saleItemsData.error, paymentsData.error, businessHoursData.error,
+        paymentMethodsData.error, categoriesData.error, suppliersData.error
       ].filter(Boolean);
 
       if (errors.length > 0) {
@@ -147,7 +156,7 @@ export default function BackupScreen() {
       }
 
       const backupData: BackupData = {
-        version: '1.0.0',
+        version: '1.1.0',
         timestamp: new Date().toISOString(),
         tenant_id: user.tenant_id,
         data: {
@@ -159,20 +168,14 @@ export default function BackupScreen() {
           sales: salesData.data || [],
           sale_items: saleItemsData.data || [],
           payments: paymentsData.data || [],
+          business_hours: businessHoursData.data || [],
+          payment_methods: paymentMethodsData.data || [],
+          categories: categoriesData.data || [],
+          suppliers: suppliersData.data || [],
         },
       };
 
-      console.log('[Backup] Dados coletados:', {
-        clients: backupData.data.clients.length,
-        services: backupData.data.services.length,
-        products: backupData.data.products.length,
-        barbers: backupData.data.barbers.length,
-        appointments: backupData.data.appointments.length,
-        sales: backupData.data.sales.length,
-        sale_items: backupData.data.sale_items.length,
-        payments: backupData.data.payments.length,
-      });
-
+      console.log('[Backup] Dados coletados. Categorias:', backupData.data.categories.length);
       return backupData;
     },
     onSuccess: async (data) => {
@@ -200,7 +203,7 @@ export default function BackupScreen() {
           const canShare = await Sharing.isAvailableAsync();
           if (canShare) {
             await Sharing.shareAsync(fileUri);
-            Alert.alert('Sucesso', 'Backup realizado e compartilhado com sucesso!');
+            // Alert removido aqui porque o menu de partilha nativo do telemóvel já serve de confirmação
           } else {
             Alert.alert('Sucesso', `Backup salvo em: ${fileUri}`);
           }
@@ -225,48 +228,40 @@ export default function BackupScreen() {
 
       console.log('[Restore] Iniciando restauração de dados...');
 
-      const { data: existingClients } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('tenant_id', user.tenant_id);
+      // 1. Apagar dados antigos respeitando as dependências (Filhos primeiro)
+      await supabase.from('payments').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('sale_items').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('sales').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('appointments').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('products').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('services').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('barbers').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('clients').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('categories').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('payment_methods').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('suppliers').delete().eq('tenant_id', user.tenant_id);
+      await supabase.from('business_hours').delete().eq('tenant_id', user.tenant_id);
 
-      if (existingClients && existingClients.length > 0) {
-        console.log('[Restore] Removendo dados antigos...');
-        
-        await supabase.from('payments').delete().eq('tenant_id', user.tenant_id);
-        await supabase.from('sale_items').delete().eq('tenant_id', user.tenant_id);
-        await supabase.from('sales').delete().eq('tenant_id', user.tenant_id);
-        await supabase.from('appointments').delete().eq('tenant_id', user.tenant_id);
-        await supabase.from('barbers').delete().eq('tenant_id', user.tenant_id);
-        await supabase.from('products').delete().eq('tenant_id', user.tenant_id);
-        await supabase.from('services').delete().eq('tenant_id', user.tenant_id);
-        await supabase.from('clients').delete().eq('tenant_id', user.tenant_id);
-      }
-
-      console.log('[Restore] Restaurando dados...');
-
-      const results = await Promise.allSettled([
-        backupData.data.clients.length > 0
-          ? supabase.from('clients').insert(backupData.data.clients)
-          : Promise.resolve({ error: null }),
-        backupData.data.services.length > 0
-          ? supabase.from('services').insert(backupData.data.services)
-          : Promise.resolve({ error: null }),
-        backupData.data.products.length > 0
-          ? supabase.from('products').insert(backupData.data.products)
-          : Promise.resolve({ error: null }),
+      console.log('[Restore] Inserindo dados base (Pais)...');
+      
+      // 2. Inserir tabelas base que não dependem de outras
+      await Promise.allSettled([
+        backupData.data.clients?.length ? supabase.from('clients').insert(backupData.data.clients) : Promise.resolve(),
+        backupData.data.categories?.length ? supabase.from('categories').insert(backupData.data.categories) : Promise.resolve(),
+        backupData.data.payment_methods?.length ? supabase.from('payment_methods').insert(backupData.data.payment_methods) : Promise.resolve(),
+        backupData.data.suppliers?.length ? supabase.from('suppliers').insert(backupData.data.suppliers) : Promise.resolve(),
+        backupData.data.business_hours?.length ? supabase.from('business_hours').insert(backupData.data.business_hours) : Promise.resolve(),
       ]);
 
-      const errors = results
-        .filter((r) => r.status === 'rejected' || (r.status === 'fulfilled' && r.value.error))
-        .map((r) => (r.status === 'rejected' ? r.reason : r.value.error));
+      console.log('[Restore] Inserindo produtos e serviços...');
 
-      if (errors.length > 0) {
-        console.error('[Restore] Erros ao restaurar dados:', errors);
-        throw new Error('Erro ao restaurar alguns dados');
-      }
+      // 3. Inserir tabelas que dependem das categorias
+      await Promise.allSettled([
+        backupData.data.services?.length ? supabase.from('services').insert(backupData.data.services) : Promise.resolve(),
+        backupData.data.products?.length ? supabase.from('products').insert(backupData.data.products) : Promise.resolve(),
+      ]);
 
-      if (backupData.data.barbers.length > 0) {
+      if (backupData.data.barbers?.length) {
         const barbersToInsert = backupData.data.barbers.map((barber) => ({
           id: barber.id,
           user_id: barber.user_id,
@@ -280,19 +275,17 @@ export default function BackupScreen() {
         await supabase.from('barbers').insert(barbersToInsert);
       }
 
-      const orderResults = await Promise.allSettled([
-        backupData.data.appointments.length > 0
-          ? supabase.from('appointments').insert(backupData.data.appointments)
-          : Promise.resolve({ error: null }),
-        backupData.data.sales.length > 0
-          ? supabase.from('sales').insert(backupData.data.sales)
-          : Promise.resolve({ error: null }),
+      console.log('[Restore] Inserindo transações...');
+
+      await Promise.allSettled([
+        backupData.data.appointments?.length ? supabase.from('appointments').insert(backupData.data.appointments) : Promise.resolve(),
+        backupData.data.sales?.length ? supabase.from('sales').insert(backupData.data.sales) : Promise.resolve(),
       ]);
 
-      if (backupData.data.sale_items.length > 0) {
+      if (backupData.data.sale_items?.length) {
         await supabase.from('sale_items').insert(backupData.data.sale_items);
       }
-      if (backupData.data.payments.length > 0) {
+      if (backupData.data.payments?.length) {
         await supabase.from('payments').insert(backupData.data.payments);
       }
 
@@ -743,318 +736,59 @@ export default function BackupScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  menuOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    zIndex: 999,
-  },
-  hamburgerMenu: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: 300,
-    height: '100%',
-    backgroundColor: colors.surface,
-    zIndex: 1000,
-    shadowColor: '#000',
-    shadowOffset: { width: 2, height: 0 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 5,
-  },
-  menuHeader: {
-    padding: 20,
-    paddingTop: 60,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-    backgroundColor: colors.background,
-  },
-  menuUserInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
-  },
-  menuUserAvatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: `${colors.primary}15` as const,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  menuUserName: {
-    fontSize: 18,
-    fontWeight: '700' as const,
-    color: colors.text,
-  },
-  menuUserRole: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  menuCloseButton: {
-    position: 'absolute',
-    top: 20,
-    right: 20,
-    padding: 4,
-  },
-  menuContent: {
-    flex: 1,
-    padding: 16,
-  },
-  menuSection: {
-    marginBottom: 8,
-  },
-  menuSectionTitle: {
-    fontSize: 12,
-    fontWeight: '700' as const,
-    color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 8,
-    marginLeft: 12,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    gap: 12,
-    marginBottom: 4,
-  },
-  menuItemText: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '600' as const,
-    color: colors.text,
-  },
-  menuItemDanger: {
-    backgroundColor: `${colors.error}10` as const,
-  },
-  menuItemTextDanger: {
-    color: colors.error,
-  },
-  menuDivider: {
-    height: 1,
-    backgroundColor: colors.borderLight,
-    marginVertical: 16,
-  },
-  hamburgerButton: {
-    padding: 8,
-    marginRight: 8,
-  },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 24,
-  },
-  headerTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  headerContent: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700' as const,
-    color: colors.text,
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    lineHeight: 20,
-  },
-  section: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
-    gap: 20,
-  },
-  warningCard: {
-    flexDirection: 'row',
-    backgroundColor: '#FEF3C7',
-    borderRadius: 16,
-    padding: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#FCD34D',
-  },
-  warningContent: {
-    flex: 1,
-  },
-  warningTitle: {
-    fontSize: 16,
-    fontWeight: '700' as const,
-    color: '#92400E',
-    marginBottom: 4,
-  },
-  warningText: {
-    fontSize: 14,
-    color: '#92400E',
-    lineHeight: 20,
-  },
-  statsCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    shadowColor: colors.cardShadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  statsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 20,
-  },
-  statsTitle: {
-    fontSize: 18,
-    fontWeight: '700' as const,
-    color: colors.text,
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  statItem: {
-    width: '31%',
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    padding: 12,
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: '700' as const,
-    color: colors.text,
-  },
-  statLabel: {
-    fontSize: 10,
-    lineHeight: 14,           // >= fontSize
-    color: colors.textSecondary,
-    textAlign: 'center',
-    includeFontPadding: false // reduz padding extra no Android
-  },
-  actionsContainer: {
-    gap: 12,
-  },
-  actionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    shadowColor: colors.cardShadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  backupButton: {
-    borderColor: '#FCD34D',
-  },
-  restoreButton: {
-    borderColor: '#93C5FD',
-  },
-  actionButtonDisabled: {
-    opacity: 0.6,
-  },
-  actionIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  backupIcon: {
-    backgroundColor: '#FEF3C7',
-  },
-  restoreIcon: {
-    backgroundColor: '#DBEAFE',
-  },
-  actionContent: {
-    flex: 1,
-  },
-  actionTitle: {
-    fontSize: 18,
-    fontWeight: '700' as const,
-    color: colors.text,
-    marginBottom: 4,
-  },
-  actionDescription: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    lineHeight: 18,
-  },
-  infoCard: {
-    flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-  },
-  infoContent: {
-    flex: 1,
-  },
-  infoTitle: {
-    fontSize: 16,
-    fontWeight: '700' as const,
-    color: colors.text,
-    marginBottom: 8,
-  },
-  infoText: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    lineHeight: 22,
-  },
-  tipsCard: {
-    flexDirection: 'row',
-    backgroundColor: '#D1FAE5',
-    borderRadius: 16,
-    padding: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#6EE7B7',
-  },
-  tipsContent: {
-    flex: 1,
-  },
-  tipsTitle: {
-    fontSize: 16,
-    fontWeight: '700' as const,
-    color: '#065F46',
-    marginBottom: 8,
-  },
-  tipsText: {
-    fontSize: 14,
-    color: '#065F46',
-    lineHeight: 22,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
+  scrollView: { flex: 1 },
+  menuOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', zIndex: 999 },
+  hamburgerMenu: { position: 'absolute', top: 0, left: 0, width: 300, height: '100%', backgroundColor: colors.surface, zIndex: 1000, shadowColor: '#000', shadowOffset: { width: 2, height: 0 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 5 },
+  menuHeader: { padding: 20, paddingTop: 60, borderBottomWidth: 1, borderBottomColor: colors.borderLight, backgroundColor: colors.background },
+  menuUserInfo: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
+  menuUserAvatar: { width: 60, height: 60, borderRadius: 30, backgroundColor: `${colors.primary}15` as const, justifyContent: 'center', alignItems: 'center' },
+  menuUserName: { fontSize: 18, fontWeight: '700', color: colors.text },
+  menuUserRole: { fontSize: 14, color: colors.textSecondary, marginTop: 2 },
+  menuCloseButton: { position: 'absolute', top: 20, right: 20, padding: 4 },
+  menuContent: { flex: 1, padding: 16 },
+  menuSection: { marginBottom: 8 },
+  menuSectionTitle: { fontSize: 12, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8, marginLeft: 12 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 12, borderRadius: 12, gap: 12, marginBottom: 4 },
+  menuItemText: { flex: 1, fontSize: 15, fontWeight: '600', color: colors.text },
+  menuItemDanger: { backgroundColor: `${colors.error}10` },
+  menuItemTextDanger: { color: colors.error },
+  menuDivider: { height: 1, backgroundColor: colors.borderLight, marginVertical: 16 },
+  hamburgerButton: { padding: 8, marginRight: 8 },
+  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 24 },
+  headerTop: { flexDirection: 'row', alignItems: 'center' },
+  headerContent: { flex: 1 },
+  title: { fontSize: 28, fontWeight: '700', color: colors.text, marginBottom: 4 },
+  subtitle: { fontSize: 14, color: colors.textSecondary, lineHeight: 20 },
+  section: { paddingHorizontal: 20, paddingBottom: 40, gap: 20 },
+  warningCard: { flexDirection: 'row', backgroundColor: '#FEF3C7', borderRadius: 16, padding: 16, gap: 12, borderWidth: 1, borderColor: '#FCD34D' },
+  warningContent: { flex: 1 },
+  warningTitle: { fontSize: 16, fontWeight: '700', color: '#92400E', marginBottom: 4 },
+  warningText: { fontSize: 14, color: '#92400E', lineHeight: 20 },
+  statsCard: { backgroundColor: colors.surface, borderRadius: 16, padding: 20, borderWidth: 1, borderColor: colors.borderLight, shadowColor: colors.cardShadow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 8, elevation: 2 },
+  statsHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 },
+  statsTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  statItem: { width: '31%', backgroundColor: colors.background, borderRadius: 12, padding: 12, alignItems: 'center', gap: 6, borderWidth: 1, borderColor: colors.border },
+  statValue: { fontSize: 20, fontWeight: '700', color: colors.text },
+  statLabel: { fontSize: 10, lineHeight: 14, color: colors.textSecondary, textAlign: 'center', includeFontPadding: false },
+  actionsContainer: { gap: 12 },
+  actionButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 16, padding: 16, gap: 12, borderWidth: 1, borderColor: colors.borderLight, shadowColor: colors.cardShadow, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 1, shadowRadius: 4, elevation: 2 },
+  backupButton: { borderColor: '#FCD34D' },
+  restoreButton: { borderColor: '#93C5FD' },
+  actionButtonDisabled: { opacity: 0.6 },
+  actionIcon: { width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center' },
+  backupIcon: { backgroundColor: '#FEF3C7' },
+  restoreIcon: { backgroundColor: '#DBEAFE' },
+  actionContent: { flex: 1 },
+  actionTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 4 },
+  actionDescription: { fontSize: 14, color: colors.textSecondary, lineHeight: 18 },
+  infoCard: { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: 16, padding: 16, gap: 12, borderWidth: 1, borderColor: colors.borderLight },
+  infoContent: { flex: 1 },
+  infoTitle: { fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 8 },
+  infoText: { fontSize: 14, color: colors.textSecondary, lineHeight: 22 },
+  tipsCard: { flexDirection: 'row', backgroundColor: '#D1FAE5', borderRadius: 16, padding: 16, gap: 12, borderWidth: 1, borderColor: '#6EE7B7' },
+  tipsContent: { flex: 1 },
+  tipsTitle: { fontSize: 16, fontWeight: '700', color: '#065F46', marginBottom: 8 },
+  tipsText: { fontSize: 14, color: '#065F46', lineHeight: 22 },
 });

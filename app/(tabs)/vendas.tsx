@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -21,8 +21,28 @@ import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import { Sale, Client, Service, Product, PaymentMethod } from '@/types/database';
 import colors from '@/constants/colors';
-import { DollarSign, Calendar, Receipt, Plus, X, ShoppingCart, Trash2, Menu, Home, BarChart3, CalendarCheck, Sparkles, Users, FileText, FolderOpen, UserCircle, ChevronRight, LogOut, Scissors } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
+import { 
+  DollarSign, 
+  Calendar, 
+  Receipt, 
+  Plus, 
+  X, 
+  ShoppingCart, 
+  Trash2, 
+  Menu, 
+  Home, 
+  CalendarCheck, 
+  Sparkles, 
+  Users, 
+  FileText, 
+  FolderOpen, 
+  UserCircle, 
+  ChevronRight, 
+  LogOut, 
+  Scissors,
+  Database
+} from 'lucide-react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
@@ -44,6 +64,7 @@ type PaymentEntry = {
 export default function VendasScreen() {
   const { user, signOut } = useAuth();
   const router = useRouter();
+  const params = useLocalSearchParams();
   const queryClient = useQueryClient();
   const [selectedMonth] = useState<Date>(new Date());
   const [showMenu, setShowMenu] = useState(false);
@@ -95,7 +116,6 @@ export default function VendasScreen() {
         throw error;
       }
 
-      console.log('[Vendas] Loaded sales:', data?.length);
       return data as Sale[];
     },
     enabled: !!user?.tenant_id,
@@ -261,7 +281,6 @@ export default function VendasScreen() {
       // Atualizar estoque dos produtos
       for (const item of cart) {
         if (item.productId) {
-          // Buscar quantidade atual
           const { data: product, error: fetchError } = await supabase
             .from('products')
             .select('stock_quantity')
@@ -273,7 +292,6 @@ export default function VendasScreen() {
             continue;
           }
 
-          // Atualizar estoque
           const newQuantity = (product.stock_quantity || 0) - item.quantity;
           const { error: stockError } = await supabase
             .from('products')
@@ -338,10 +356,6 @@ export default function VendasScreen() {
   };
 
   const addPayment = () => {
-    console.log('========================================');
-    console.log('[Payment] ⚡ addPayment CALLED');
-    console.log('[Payment] Values:', { paymentAmount, paymentMethod });
-    
     const trimmedAmount = paymentAmount.trim();
     
     if (!trimmedAmount || trimmedAmount === '' || trimmedAmount === '0' || trimmedAmount === '0.00') {
@@ -356,12 +370,9 @@ export default function VendasScreen() {
       return;
     }
     
-    console.log('[Payment] ✅ Adding:', { method: paymentMethod, amount });
     const newPayments = [...payments, { method: paymentMethod, amount }];
     setPayments(newPayments);
     setPaymentAmount('');
-    console.log('[Payment] ✅ Success! Total payments:', newPayments.length);
-    console.log('========================================');
   };
 
   const removePayment = (index: number) => {
@@ -375,23 +386,48 @@ export default function VendasScreen() {
   const remaining = Math.round((total - totalPaid) * 100) / 100;
   const canFinish = cart.length > 0 && Math.abs(remaining) <= 0.01;
 
-  console.log('[PDV] Values:', { 
-    subtotal, 
-    discountValue, 
-    total, 
-    totalPaid, 
-    remaining, 
-    canFinish,
-    cartLength: cart.length,
-    remainingAbs: Math.abs(remaining)
-  });
-
   const filteredItems = searchItem.length >= 2
     ? [
         ...(services || []).filter(s => s.name.toLowerCase().includes(searchItem.toLowerCase())),
         ...(products || []).filter(p => p.name.toLowerCase().includes(searchItem.toLowerCase())),
       ]
     : [];
+
+  useEffect(() => {
+    if (params.autoOpen === 'true') {
+      const loadAutomaticData = async () => {
+        setShowPdvModal(true);
+
+        if (params.serviceId) {
+          const { data: serviceData } = await supabase
+            .from('services')
+            .select('*')
+            .eq('id', params.serviceId)
+            .single();
+
+          if (serviceData) {
+            addToCart(serviceData, 'service');
+          }
+        }
+
+        if (params.clientId) {
+          const { data: clientData } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('id', params.clientId)
+            .single();
+
+          if (clientData) {
+            setSelectedClient(clientData);
+          }
+        }
+
+        router.setParams({ autoOpen: 'false', clientId: '', serviceId: '' });
+      };
+
+      loadAutomaticData();
+    }
+  }, [params.autoOpen]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -439,15 +475,6 @@ export default function VendasScreen() {
             >
               <Home size={22} color={colors.primary} strokeWidth={2} />
               <Text style={styles.menuItemText}>Dashboard (Início)</Text>
-              <ChevronRight size={18} color={colors.textSecondary} />
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => navigateAndCloseMenu('/(tabs)')}
-            >
-              <BarChart3 size={22} color={colors.accent} strokeWidth={2} />
-              <Text style={styles.menuItemText}>Gráficos</Text>
               <ChevronRight size={18} color={colors.textSecondary} />
             </TouchableOpacity>
 
@@ -537,7 +564,16 @@ export default function VendasScreen() {
             
             <TouchableOpacity 
               style={styles.menuItem}
-              onPress={() => navigateAndCloseMenu('/(tabs)')}
+              onPress={() => navigateAndCloseMenu('/backup')}
+            >
+              <Database size={22} color='#F59E0B' strokeWidth={2} />
+              <Text style={styles.menuItemText}>Backup de Dados</Text>
+              <ChevronRight size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.menuItem}
+              onPress={() => navigateAndCloseMenu('/perfil')}
             >
               <UserCircle size={22} color={colors.primary} strokeWidth={2} />
               <Text style={styles.menuItemText}>Perfil (Gerenciar)</Text>
@@ -614,7 +650,8 @@ export default function VendasScreen() {
                   <View style={styles.saleItems}>
                     {sale.items.map((item) => (
                       <Text key={item.id} style={styles.itemText}>
-                        {item.quantity}x {item.item_name} - R$ {Number(item.total_price).toFixed(2)}
+                        - {item.quantity}x {item.item_name} R$ 
+                        {Number(item.total_price).toFixed(2)}
                       </Text>
                     ))}
                   </View>
@@ -797,7 +834,6 @@ export default function VendasScreen() {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Pagamentos</Text>
               
-              {/* Formulário de Adicionar Pagamento - Sempre Visível */}
               <View style={styles.paymentForm}>
                 <Text style={styles.paymentFormLabel}>Forma de Pagamento</Text>
                 <View style={styles.paymentMethods}>
@@ -809,10 +845,7 @@ export default function VendasScreen() {
                         paymentMethod === method && styles.paymentMethodButtonActive,
                       ]}
                       activeOpacity={0.7}
-                      onPress={() => {
-                        console.log('[Payment] Method selected:', method);
-                        setPaymentMethod(method);
-                      }}
+                      onPress={() => setPaymentMethod(method)}
                     >
                       <Text
                         style={[
@@ -833,20 +866,14 @@ export default function VendasScreen() {
                     placeholder="0.00"
                     placeholderTextColor={colors.textLight}
                     value={paymentAmount}
-                    onChangeText={(text) => {
-                      console.log('[Payment] Amount changed:', text);
-                      setPaymentAmount(text);
-                    }}
+                    onChangeText={setPaymentAmount}
                     keyboardType="decimal-pad"
                     returnKeyType="done"
                   />
                   {remaining > 0 && (
                     <TouchableOpacity
                       style={[styles.addButton, { backgroundColor: colors.accent, paddingHorizontal: 12 }]}
-                      onPress={() => {
-                        console.log('[Payment] Quick fill:', remaining.toFixed(2));
-                        setPaymentAmount(remaining.toFixed(2));
-                      }}
+                      onPress={() => setPaymentAmount(remaining.toFixed(2))}
                     >
                       <Text style={styles.addButtonText}>R$ {remaining.toFixed(2)}</Text>
                     </TouchableOpacity>
@@ -854,17 +881,13 @@ export default function VendasScreen() {
                   <TouchableOpacity
                     style={[styles.addButton, { paddingHorizontal: 20 }]}
                     activeOpacity={0.7}
-                    onPress={() => {
-                      console.log('[Payment] Add button pressed directly');
-                      addPayment();
-                    }}
+                    onPress={addPayment}
                   >
                     <Plus size={18} color={colors.surface} strokeWidth={2.5} />
                   </TouchableOpacity>
                 </View>
               </View>
 
-              {/* Lista de Pagamentos Adicionados */}
               {payments.length === 0 ? (
                 <Text style={styles.emptyCart}>Nenhum pagamento adicionado ainda</Text>
               ) : (
@@ -890,7 +913,7 @@ export default function VendasScreen() {
               {discountValue > 0 && (
                 <View style={styles.totalRow}>
                   <Text style={styles.totalLabel}>Desconto:</Text>
-                  <Text style={[styles.totalValue, styles.discountText]}>- R$ {discountValue.toFixed(2)}</Text>
+                  <Text style={[styles.totalValue, styles.discountText]}>R$ {discountValue.toFixed(2)}</Text>
                 </View>
               )}
               <View style={styles.totalRow}>
@@ -918,26 +941,11 @@ export default function VendasScreen() {
               style={[styles.finishButton, (!canFinish || createSaleMutation.isPending) && styles.finishButtonDisabled]}
               activeOpacity={0.7}
               onPress={() => {
-                console.log('[PDV] Button pressed!', { 
-                  canFinish, 
-                  isPending: createSaleMutation.isPending,
-                  cartLength: cart.length,
-                  remaining,
-                  total,
-                  totalPaid,
-                  paymentsLength: payments.length
-                });
-                
-                if (createSaleMutation.isPending) {
-                  console.log('[PDV] Already processing...');
-                  return;
-                }
-                
+                if (createSaleMutation.isPending) return;
                 if (cart.length === 0) {
                   Alert.alert('Atenção', 'Adicione itens ao carrinho antes de finalizar a venda');
                   return;
                 }
-                
                 if (Math.abs(remaining) > 0.01) {
                   const message = remaining > 0 
                     ? `Faltam R$ ${remaining.toFixed(2)} para completar o pagamento`
@@ -945,8 +953,6 @@ export default function VendasScreen() {
                   Alert.alert('Atenção', message);
                   return;
                 }
-                
-                console.log('[PDV] Calling mutation...');
                 createSaleMutation.mutate();
               }}
             >

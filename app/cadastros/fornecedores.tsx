@@ -8,9 +8,13 @@ import {
   TextInput,
   Modal,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import colors from '@/constants/colors';
 import {
   Plus,
@@ -21,6 +25,7 @@ import {
   X,
   Check,
   MapPin,
+  Trash2,
 } from 'lucide-react-native';
 
 type Fornecedor = {
@@ -36,9 +41,12 @@ type Fornecedor = {
 
 export default function FornecedoresScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  
   const [searchQuery, setSearchQuery] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [editingFornecedor, setEditingFornecedor] = useState<Fornecedor | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [formData, setFormData] = useState({
     nome: '',
@@ -49,36 +57,33 @@ export default function FornecedoresScreen() {
     produtos: '',
   });
 
-  const [fornecedores] = useState<Fornecedor[]>([
-    {
-      id: '1',
-      nome: 'Distribuidora Premium',
-      telefone: '(11) 3333-4444',
-      email: 'contato@premium.com',
-      endereco: 'Rua Comercial, 456 - Centro',
-      cnpj: '12.345.678/0001-90',
-      produtos: ['Pomadas', 'Ceras', 'Óleos'],
-      ativo: true,
+  // Busca os fornecedores na base de dados
+  const { data: fornecedores = [], isLoading, refetch } = useQuery({
+    queryKey: ['suppliers', user?.tenant_id],
+    queryFn: async () => {
+      if (!user?.tenant_id) return [];
+      
+      const { data, error } = await supabase
+        .from('suppliers')
+        .select('*')
+        .eq('tenant_id', user.tenant_id)
+        .order('name');
+
+      if (error) throw error;
+
+      return data.map((f: any) => ({
+        id: f.id,
+        nome: f.name,
+        telefone: f.phone,
+        email: f.email || '',
+        endereco: f.address || '',
+        cnpj: f.cnpj || '',
+        produtos: f.products || [],
+        ativo: f.is_active,
+      })) as Fornecedor[];
     },
-    {
-      id: '2',
-      nome: 'Cosméticos Pro',
-      telefone: '(11) 3333-5555',
-      email: 'vendas@cosmeticospro.com',
-      endereco: 'Av. Industrial, 789',
-      cnpj: '98.765.432/0001-10',
-      produtos: ['Shampoos', 'Condicionadores'],
-      ativo: true,
-    },
-    {
-      id: '3',
-      nome: 'Barber Supply',
-      telefone: '(11) 3333-6666',
-      email: 'contato@barbersupply.com',
-      produtos: ['Acessórios', 'Produtos'],
-      ativo: true,
-    },
-  ]);
+    enabled: !!user?.tenant_id,
+  });
 
   const filteredFornecedores = fornecedores.filter((fornecedor) =>
     fornecedor.nome.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -109,13 +114,82 @@ export default function FornecedoresScreen() {
     setFormData({ nome: '', telefone: '', email: '', endereco: '', cnpj: '', produtos: '' });
   };
 
-  const handleSave = () => {
-    if (!formData.nome || !formData.telefone) {
+  const handleSave = async () => {
+    if (!user?.tenant_id) return;
+    
+    if (!formData.nome.trim() || !formData.telefone.trim()) {
       Alert.alert('Erro', 'Nome e telefone são obrigatórios');
       return;
     }
-    Alert.alert('Sucesso', 'Fornecedor salvo com sucesso!');
-    handleCloseModal();
+
+    setIsSaving(true);
+    try {
+      const produtosArray = formData.produtos
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+
+      const { error } = await supabase
+        .from('suppliers')
+        .upsert({
+          id: editingFornecedor ? editingFornecedor.id : undefined,
+          tenant_id: user.tenant_id,
+          name: formData.nome.trim(),
+          phone: formData.telefone.trim(),
+          email: formData.email.trim() || null,
+          address: formData.endereco.trim() || null,
+          cnpj: formData.cnpj.trim() || null,
+          products: produtosArray,
+          is_active: true,
+        });
+
+      if (error) throw error;
+
+      await refetch();
+      Alert.alert('Sucesso', 'Fornecedor salvo com sucesso!');
+      handleCloseModal();
+    } catch (error) {
+      console.error('Erro ao salvar fornecedor:', error);
+      Alert.alert('Erro', 'Não foi possível salvar o fornecedor.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const confirmDelete = () => {
+    if (!editingFornecedor) return;
+    
+    Alert.alert(
+      'Excluir Fornecedor',
+      `Tem certeza que deseja excluir "${editingFornecedor.nome}"?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { 
+          text: 'Excluir', 
+          style: 'destructive', 
+          onPress: async () => {
+            setIsSaving(true);
+            try {
+              const { error } = await supabase
+                .from('suppliers')
+                .delete()
+                .eq('id', editingFornecedor.id);
+                
+              if (error) throw error;
+              
+              await refetch();
+              Alert.alert('Sucesso', 'Fornecedor excluído!');
+              handleCloseModal();
+            } catch (error) {
+              console.error('Erro ao excluir:', error);
+              Alert.alert('Erro', 'Não foi possível excluir o fornecedor.');
+            } finally {
+              setIsSaving(false);
+            }
+          } 
+        }
+      ]
+    );
   };
 
   return (
@@ -140,59 +214,71 @@ export default function FornecedoresScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.scrollView}>
-        <View style={styles.fornecedoresList}>
-          {filteredFornecedores.map((fornecedor) => (
-            <TouchableOpacity
-              key={fornecedor.id}
-              style={styles.fornecedorCard}
-              onPress={() => handleOpenModal(fornecedor)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.fornecedorHeader}>
-                <View style={styles.fornecedorAvatar}>
-                  <Truck size={24} color='#06B6D4' strokeWidth={2} />
-                </View>
-                <View style={styles.fornecedorInfo}>
-                  <Text style={styles.fornecedorName}>{fornecedor.nome}</Text>
-                  <View style={styles.fornecedorDetail}>
-                    <Phone size={14} color={colors.textSecondary} />
-                    <Text style={styles.fornecedorDetailText}>
-                      {fornecedor.telefone}
-                    </Text>
-                  </View>
-                  {fornecedor.email && (
-                    <View style={styles.fornecedorDetail}>
-                      <Mail size={14} color={colors.textSecondary} />
-                      <Text style={styles.fornecedorDetailText}>
-                        {fornecedor.email}
-                      </Text>
-                    </View>
-                  )}
-                  {fornecedor.endereco && (
-                    <View style={styles.fornecedorDetail}>
-                      <MapPin size={14} color={colors.textSecondary} />
-                      <Text style={styles.fornecedorDetailText}>
-                        {fornecedor.endereco}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-              <View style={styles.produtosContainer}>
-                <Text style={styles.produtosLabel}>Produtos:</Text>
-                <View style={styles.produtosTags}>
-                  {fornecedor.produtos.map((produto, index) => (
-                    <View key={index} style={styles.produtoTag}>
-                      <Text style={styles.produtoTagText}>{produto}</Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            </TouchableOpacity>
-          ))}
+      {isLoading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
-      </ScrollView>
+      ) : filteredFornecedores.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyText}>Nenhum fornecedor encontrado.</Text>
+        </View>
+      ) : (
+        <ScrollView style={styles.scrollView}>
+          <View style={styles.fornecedoresList}>
+            {filteredFornecedores.map((fornecedor) => (
+              <TouchableOpacity
+                key={fornecedor.id}
+                style={styles.fornecedorCard}
+                onPress={() => handleOpenModal(fornecedor)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.fornecedorHeader}>
+                  <View style={styles.fornecedorAvatar}>
+                    <Truck size={24} color='#06B6D4' strokeWidth={2} />
+                  </View>
+                  <View style={styles.fornecedorInfo}>
+                    <Text style={styles.fornecedorName}>{fornecedor.nome}</Text>
+                    <View style={styles.fornecedorDetail}>
+                      <Phone size={14} color={colors.textSecondary} />
+                      <Text style={styles.fornecedorDetailText}>
+                        {fornecedor.telefone}
+                      </Text>
+                    </View>
+                    {fornecedor.email && (
+                      <View style={styles.fornecedorDetail}>
+                        <Mail size={14} color={colors.textSecondary} />
+                        <Text style={styles.fornecedorDetailText}>
+                          {fornecedor.email}
+                        </Text>
+                      </View>
+                    )}
+                    {fornecedor.endereco && (
+                      <View style={styles.fornecedorDetail}>
+                        <MapPin size={14} color={colors.textSecondary} />
+                        <Text style={styles.fornecedorDetailText}>
+                          {fornecedor.endereco}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+                {fornecedor.produtos && fornecedor.produtos.length > 0 && (
+                  <View style={styles.produtosContainer}>
+                    <Text style={styles.produtosLabel}>Produtos fornecidos:</Text>
+                    <View style={styles.produtosTags}>
+                      {fornecedor.produtos.map((produto, index) => (
+                        <View key={index} style={styles.produtoTag}>
+                          <Text style={styles.produtoTagText}>{produto}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </ScrollView>
+      )}
 
       <Modal
         visible={modalVisible}
@@ -214,6 +300,7 @@ export default function FornecedoresScreen() {
               <TouchableOpacity
                 onPress={handleCloseModal}
                 style={styles.closeButton}
+                disabled={isSaving}
               >
                 <X size={24} color={colors.text} />
               </TouchableOpacity>
@@ -224,12 +311,28 @@ export default function FornecedoresScreen() {
                 <Text style={styles.inputLabel}>Nome *</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="Nome do fornecedor"
+                  placeholder="Nome da empresa ou fornecedor"
                   placeholderTextColor={colors.textSecondary}
                   value={formData.nome}
                   onChangeText={(text) =>
                     setFormData({ ...formData, nome: text })
                   }
+                  editable={!isSaving}
+                />
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Telefone *</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="(00) 00000-0000"
+                  placeholderTextColor={colors.textSecondary}
+                  value={formData.telefone}
+                  onChangeText={(text) =>
+                    setFormData({ ...formData, telefone: text })
+                  }
+                  keyboardType="phone-pad"
+                  editable={!isSaving}
                 />
               </View>
 
@@ -244,20 +347,7 @@ export default function FornecedoresScreen() {
                     setFormData({ ...formData, cnpj: text })
                   }
                   keyboardType="number-pad"
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Telefone *</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="(00) 0000-0000"
-                  placeholderTextColor={colors.textSecondary}
-                  value={formData.telefone}
-                  onChangeText={(text) =>
-                    setFormData({ ...formData, telefone: text })
-                  }
-                  keyboardType="phone-pad"
+                  editable={!isSaving}
                 />
               </View>
 
@@ -265,7 +355,7 @@ export default function FornecedoresScreen() {
                 <Text style={styles.inputLabel}>E-mail</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="email@exemplo.com"
+                  placeholder="contato@fornecedor.com"
                   placeholderTextColor={colors.textSecondary}
                   value={formData.email}
                   onChangeText={(text) =>
@@ -273,6 +363,7 @@ export default function FornecedoresScreen() {
                   }
                   keyboardType="email-address"
                   autoCapitalize="none"
+                  editable={!isSaving}
                 />
               </View>
 
@@ -286,6 +377,7 @@ export default function FornecedoresScreen() {
                   onChangeText={(text) =>
                     setFormData({ ...formData, endereco: text })
                   }
+                  editable={!isSaving}
                 />
               </View>
 
@@ -293,7 +385,7 @@ export default function FornecedoresScreen() {
                 <Text style={styles.inputLabel}>Produtos (separados por vírgula)</Text>
                 <TextInput
                   style={[styles.input, styles.textArea]}
-                  placeholder="Pomadas, Ceras, Óleos"
+                  placeholder="Shampoo, Lâminas, Toalhas..."
                   placeholderTextColor={colors.textSecondary}
                   value={formData.produtos}
                   onChangeText={(text) =>
@@ -302,6 +394,7 @@ export default function FornecedoresScreen() {
                   multiline
                   numberOfLines={3}
                   textAlignVertical="top"
+                  editable={!isSaving}
                 />
               </View>
             </ScrollView>
@@ -311,16 +404,37 @@ export default function FornecedoresScreen() {
                 style={styles.cancelButton}
                 onPress={handleCloseModal}
                 activeOpacity={0.7}
+                disabled={isSaving}
               >
                 <Text style={styles.cancelButtonText}>Cancelar</Text>
               </TouchableOpacity>
+
+              {/* Botão de Excluir aparece apenas se estivermos a editar */}
+              {editingFornecedor && (
+                <TouchableOpacity
+                  style={[styles.cancelButton, { flex: 0, width: 48, borderColor: colors.error, backgroundColor: `${colors.error}10` }]}
+                  onPress={confirmDelete}
+                  activeOpacity={0.7}
+                  disabled={isSaving}
+                >
+                  <Trash2 size={20} color={colors.error} />
+                </TouchableOpacity>
+              )}
+
               <TouchableOpacity
                 style={styles.saveButton}
                 onPress={handleSave}
                 activeOpacity={0.7}
+                disabled={isSaving}
               >
-                <Check size={20} color={colors.surface} strokeWidth={2.5} />
-                <Text style={styles.saveButtonText}>Salvar</Text>
+                {isSaving ? (
+                  <ActivityIndicator size="small" color={colors.surface} />
+                ) : (
+                  <>
+                    <Check size={20} color={colors.surface} strokeWidth={2.5} />
+                    <Text style={styles.saveButtonText}>Salvar</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -331,203 +445,41 @@ export default function FornecedoresScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    padding: 16,
-    gap: 12,
-    backgroundColor: colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  searchBox: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    height: 48,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: colors.text,
-  },
-  addButton: {
-    width: 48,
-    height: 48,
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  fornecedoresList: {
-    padding: 16,
-    gap: 12,
-  },
-  fornecedorCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: 12,
-  },
-  fornecedorHeader: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  fornecedorAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: '#06B6D415',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fornecedorInfo: {
-    flex: 1,
-    gap: 6,
-  },
-  fornecedorName: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: colors.text,
-  },
-  fornecedorDetail: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  fornecedorDetailText: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    flex: 1,
-  },
-  produtosContainer: {
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 12,
-    gap: 8,
-  },
-  produtosLabel: {
-    fontSize: 13,
-    fontWeight: '600' as const,
-    color: colors.textSecondary,
-  },
-  produtosTags: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  produtoTag: {
-    backgroundColor: colors.background,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  produtoTagText: {
-    fontSize: 13,
-    color: colors.text,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: '90%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '700' as const,
-    color: colors.text,
-  },
-  closeButton: {
-    padding: 4,
-  },
-  formContainer: {
-    padding: 20,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: '600' as const,
-    color: colors.text,
-    marginBottom: 8,
-  },
-  input: {
-    backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 16,
-    color: colors.text,
-  },
-  textArea: {
-    minHeight: 80,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    padding: 20,
-    gap: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  cancelButton: {
-    flex: 1,
-    height: 48,
-    backgroundColor: colors.background,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  cancelButtonText: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: colors.text,
-  },
-  saveButton: {
-    flex: 1,
-    height: 48,
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-  saveButtonText: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: colors.surface,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
+  searchContainer: { flexDirection: 'row', padding: 16, gap: 12, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+  searchBox: { flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: colors.background, borderRadius: 12, paddingHorizontal: 12, height: 48, gap: 8, borderWidth: 1, borderColor: colors.border },
+  searchInput: { flex: 1, fontSize: 16, color: colors.text },
+  addButton: { width: 48, height: 48, backgroundColor: colors.primary, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  emptyText: { fontSize: 16, color: colors.textSecondary, textAlign: 'center' },
+  scrollView: { flex: 1 },
+  fornecedoresList: { padding: 16, gap: 12 },
+  fornecedorCard: { backgroundColor: colors.surface, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: colors.border, gap: 12 },
+  fornecedorHeader: { flexDirection: 'row', gap: 12 },
+  fornecedorAvatar: { width: 50, height: 50, borderRadius: 25, backgroundColor: '#06B6D415', justifyContent: 'center', alignItems: 'center' },
+  fornecedorInfo: { flex: 1, gap: 6 },
+  fornecedorName: { fontSize: 16, fontWeight: '600', color: colors.text },
+  fornecedorDetail: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  fornecedorDetailText: { fontSize: 14, color: colors.textSecondary, flex: 1 },
+  produtosContainer: { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 12, gap: 8 },
+  produtosLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+  produtosTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  produtoTag: { backgroundColor: colors.background, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border },
+  produtoTagText: { fontSize: 13, color: colors.text },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'flex-end' },
+  modalContent: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: colors.border },
+  modalTitle: { fontSize: 20, fontWeight: '700', color: colors.text },
+  closeButton: { padding: 4 },
+  formContainer: { padding: 20 },
+  inputGroup: { marginBottom: 20 },
+  inputLabel: { fontSize: 14, fontWeight: '600', color: colors.text, marginBottom: 8 },
+  input: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 14, fontSize: 16, color: colors.text },
+  textArea: { minHeight: 80 },
+  modalActions: { flexDirection: 'row', padding: 20, gap: 12, borderTopWidth: 1, borderTopColor: colors.border },
+  cancelButton: { flex: 1, height: 48, backgroundColor: colors.background, borderRadius: 12, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: colors.border },
+  cancelButtonText: { fontSize: 16, fontWeight: '600', color: colors.text },
+  saveButton: { flex: 1, height: 48, backgroundColor: colors.primary, borderRadius: 12, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 },
+  saveButtonText: { fontSize: 16, fontWeight: '600', color: colors.surface },
 });

@@ -23,17 +23,13 @@ import colors from '@/constants/colors';
 import {
   DollarSign,
   Calendar,
-  TrendingUp,
   Users,
   LogOut,
   Scissors,
-  BarChart3,
   CalendarCheck,
   Sparkles,
   X,
   Send,
-  LineChart,
-  PieChart,
   Menu,
   Home,
   ShoppingCart,
@@ -51,7 +47,6 @@ const { width } = Dimensions.get('window');
 export default function DashboardScreen() {
   const { user, signOut } = useAuth();
   const router = useRouter();
-  const [showChartsModal, setShowChartsModal] = useState(false);
   const [showAgendaModal, setShowAgendaModal] = useState(false);
   const [showAIModal, setShowAIModal] = useState(false);
   const [aiInput, setAiInput] = useState('');
@@ -65,8 +60,8 @@ export default function DashboardScreen() {
     queryFn: async () => {
       if (!user?.tenant_id) return null;
 
-      const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
-      const weekEnd = endOfWeek(new Date(), { weekStartsOn: 1 });
+      const weekStart = startOfWeek(new Date(), { weekStartsOn: 0 });
+      const weekEnd = endOfWeek(new Date(), { weekStartsOn: 0 });
 
       const [salesResult, appointmentsResult, clientsResult] = await Promise.all([
         supabase
@@ -88,10 +83,6 @@ export default function DashboardScreen() {
           .select('id', { count: 'exact', head: true })
           .eq('tenant_id', user.tenant_id),
       ]);
-
-      console.log('[Dashboard] Sales:', salesResult.data?.length);
-      console.log('[Dashboard] Appointments:', appointmentsResult.data?.length);
-      console.log('[Dashboard] Clients:', clientsResult.count);
 
       const totalRevenue = salesResult.data?.reduce((sum, sale) => sum + Number(sale.total), 0) || 0;
       const totalSales = salesResult.data?.length || 0;
@@ -158,7 +149,6 @@ export default function DashboardScreen() {
     setAiLoading(true);
 
     try {
-      // Verificar se a API key está configurada
       const apiKey = Constants.expoConfig?.extra?.groqApiKey || process.env.EXPO_PUBLIC_GROQ_API_KEY;
       
       if (!apiKey) {
@@ -169,7 +159,6 @@ export default function DashboardScreen() {
       O usuário tem acesso às seguintes informações:
       - Vendas totais da semana: R$ ${metrics?.totalRevenue.toFixed(2) || '0.00'}
       - Número de vendas: ${metrics?.totalSales || 0}
-      - Ticket médio: R$ ${metrics?.avgTicket.toFixed(2) || '0.00'}
       - Atendimentos: ${metrics?.completedAppointments || 0}/${metrics?.totalAppointments || 0}
       - Total de clientes: ${metrics?.totalClients || 0}
       
@@ -188,7 +177,7 @@ export default function DashboardScreen() {
             ...aiMessages,
             { role: 'user', content: userMessage }
           ],
-          model: 'llama-3.3-70b-versatile',
+          model: 'llama3-8b-8192',
           temperature: 0.7,
           max_tokens: 1024,
         }),
@@ -260,18 +249,6 @@ export default function DashboardScreen() {
             >
               <Home size={22} color={colors.primary} strokeWidth={2} />
               <Text style={styles.menuItemText}>Dashboard (Início)</Text>
-              <ChevronRight size={18} color={colors.textSecondary} />
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.menuItem}
-              onPress={() => {
-                toggleMenu();
-                setTimeout(() => setShowChartsModal(true), 300);
-              }}
-            >
-              <BarChart3 size={22} color={colors.accent} strokeWidth={2} />
-              <Text style={styles.menuItemText}>Gráficos</Text>
               <ChevronRight size={18} color={colors.textSecondary} />
             </TouchableOpacity>
 
@@ -421,7 +398,7 @@ export default function DashboardScreen() {
             </TouchableOpacity>
           </View>
           <Text style={styles.subtitle}>
-            Semana de {format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'dd/MM', { locale: ptBR })} a {format(endOfWeek(new Date(), { weekStartsOn: 1 }), 'dd/MM', { locale: ptBR })}
+          Semana de {format(startOfWeek(new Date(), { weekStartsOn: 0 }), 'dd/MM', { locale: ptBR })} a {format(endOfWeek(new Date(), { weekStartsOn: 0 }), 'dd/MM', { locale: ptBR })}
           </Text>
         </View>
 
@@ -444,16 +421,6 @@ export default function DashboardScreen() {
               {metrics?.completedAppointments || 0}/{metrics?.totalAppointments || 0}
             </Text>
             <Text style={styles.metricLabel}>Atendimentos</Text>
-          </View>
-
-          <View style={styles.metricCard}>
-            <View style={[styles.metricIcon, styles.metricIconAccent]}>
-              <TrendingUp size={24} color={colors.accent} strokeWidth={2.5} />
-            </View>
-            <Text style={styles.metricValue}>
-              R$ {metrics?.avgTicket.toFixed(2) || '0.00'}
-            </Text>
-            <Text style={styles.metricLabel}>Ticket Médio</Text>
           </View>
 
           <View style={styles.metricCard}>
@@ -488,16 +455,6 @@ export default function DashboardScreen() {
                 <DollarSign size={24} color={colors.secondary} strokeWidth={2.5} />
               </View>
               <Text style={styles.quickActionText}>Nova Venda</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.quickAction, styles.quickActionAccent]}
-              onPress={() => setShowChartsModal(true)}
-            >
-              <View style={[styles.quickActionIcon, styles.quickActionIconAccent]}>
-                <BarChart3 size={24} color={colors.accent} strokeWidth={2.5} />
-              </View>
-              <Text style={styles.quickActionText}>Gráficos</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
@@ -551,73 +508,6 @@ export default function DashboardScreen() {
             </TouchableOpacity>
           </View>
         </View>
-
-        <Modal
-          visible={showChartsModal}
-          animationType="slide"
-          transparent={true}
-          onRequestClose={() => setShowChartsModal(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Gráficos e Análises</Text>
-                <TouchableOpacity onPress={() => setShowChartsModal(false)}>
-                  <X size={24} color={colors.text} />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
-                <View style={styles.chartSection}>
-                  <View style={styles.chartCard}>
-                    <View style={styles.chartHeader}>
-                      <LineChart size={28} color={colors.primary} strokeWidth={2} />
-                      <Text style={styles.chartTitle}>Vendas por Período</Text>
-                    </View>
-                    <Text style={styles.chartValue}>R$ {metrics?.totalRevenue.toFixed(2) || '0.00'}</Text>
-                    <Text style={styles.chartSubtitle}>Faturamento da semana</Text>
-                    <View style={styles.chartBar}>
-                      <View style={[styles.chartBarFill, { width: '75%', backgroundColor: colors.primary }]} />
-                    </View>
-                  </View>
-
-                  <View style={styles.chartCard}>
-                    <View style={styles.chartHeader}>
-                      <PieChart size={28} color={colors.secondary} strokeWidth={2} />
-                      <Text style={styles.chartTitle}>Taxa de Conversão</Text>
-                    </View>
-                    <Text style={styles.chartValue}>
-                      {metrics?.totalAppointments ? 
-                        ((metrics.completedAppointments / metrics.totalAppointments) * 100).toFixed(1) 
-                        : '0'}%
-                    </Text>
-                    <Text style={styles.chartSubtitle}>Atendimentos completados</Text>
-                    <View style={styles.chartBar}>
-                      <View style={[styles.chartBarFill, { 
-                        width: metrics?.totalAppointments ? 
-                          `${(metrics.completedAppointments / metrics.totalAppointments) * 100}%` 
-                          : '0%',
-                        backgroundColor: colors.secondary 
-                      }]} />
-                    </View>
-                  </View>
-
-                  <View style={styles.chartCard}>
-                    <View style={styles.chartHeader}>
-                      <TrendingUp size={28} color={colors.accent} strokeWidth={2} />
-                      <Text style={styles.chartTitle}>Crescimento</Text>
-                    </View>
-                    <Text style={styles.chartValue}>+{metrics?.totalSales || 0}</Text>
-                    <Text style={styles.chartSubtitle}>Vendas esta semana</Text>
-                    <View style={styles.chartBar}>
-                      <View style={[styles.chartBarFill, { width: '60%', backgroundColor: colors.accent }]} />
-                    </View>
-                  </View>
-                </View>
-              </ScrollView>
-            </View>
-          </View>
-        </Modal>
 
         <Modal
           visible={showAgendaModal}
@@ -955,9 +845,6 @@ const styles = StyleSheet.create({
   metricIconSecondary: {
     backgroundColor: `${colors.secondary}15` as const,
   },
-  metricIconAccent: {
-    backgroundColor: `${colors.accent}15` as const,
-  },
   metricIconInfo: {
     backgroundColor: `${colors.primary}15` as const,
   },
@@ -1007,9 +894,6 @@ const styles = StyleSheet.create({
   quickActionSecondary: {
     borderColor: `${colors.secondary}20` as const,
   },
-  quickActionAccent: {
-    borderColor: `${colors.accent}20` as const,
-  },
   quickActionInfo: {
     borderColor: '#3B82F620',
   },
@@ -1037,9 +921,6 @@ const styles = StyleSheet.create({
   },
   quickActionIconSecondary: {
     backgroundColor: `${colors.secondary}15` as const,
-  },
-  quickActionIconAccent: {
-    backgroundColor: `${colors.accent}15` as const,
   },
   quickActionIconInfo: {
     backgroundColor: '#3B82F615',
@@ -1093,54 +974,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 20,
   },
-  chartSection: {
-    gap: 16,
-    paddingBottom: 20,
-  },
-  chartCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    shadowColor: colors.cardShadow,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  chartHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 16,
-  },
-  chartTitle: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: colors.text,
-  },
-  chartValue: {
-    fontSize: 32,
-    fontWeight: '700' as const,
-    color: colors.text,
-    marginBottom: 4,
-  },
-  chartSubtitle: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginBottom: 16,
-  },
-  chartBar: {
-    height: 8,
-    backgroundColor: colors.border,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  chartBarFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
   agendaSection: {
     gap: 20,
     paddingBottom: 20,
@@ -1171,10 +1004,10 @@ const styles = StyleSheet.create({
   },
   agendaSummaryLabel: {
     fontSize: 13,
-    lineHeight: 14,           // >= fontSize
+    lineHeight: 14,
     color: colors.textSecondary,
     textAlign: 'center',
-    includeFontPadding: false // reduz padding extra no Android
+    includeFontPadding: false
   },
   agendaButton: {
     backgroundColor: colors.primary,

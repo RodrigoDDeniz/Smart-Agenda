@@ -1,3 +1,6 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import React, { useState } from 'react';
 import {
   View,
@@ -33,6 +36,9 @@ type Servico = {
 
 export default function ServicosScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [editingServico, setEditingServico] = useState<Servico | null>(null);
@@ -44,50 +50,78 @@ export default function ServicosScreen() {
     descricao: '',
   });
 
-  const [servicos] = useState<Servico[]>([
-    {
-      id: '1',
-      nome: 'Corte Masculino',
-      preco: 45.0,
-      duracao: 30,
-      descricao: 'Corte tradicional ou moderno',
-      ativo: true,
-    },
-    {
-      id: '2',
-      nome: 'Barba',
-      preco: 35.0,
-      duracao: 20,
-      descricao: 'Aparar e finalizar',
-      ativo: true,
-    },
-    {
-      id: '3',
-      nome: 'Corte + Barba',
-      preco: 70.0,
-      duracao: 45,
-      descricao: 'Combo completo',
-      ativo: true,
-    },
-    {
-      id: '4',
-      nome: 'Corte Infantil',
-      preco: 35.0,
-      duracao: 25,
-      ativo: true,
-    },
-    {
-      id: '5',
-      nome: 'Sobrancelha',
-      preco: 15.0,
-      duracao: 10,
-      ativo: true,
-    },
-  ]);
+  // 1. Busca os serviços reais no Supabase
+  const { data: servicos = [], isLoading } = useQuery({
+    queryKey: ['services', user?.tenant_id],
+    queryFn: async () => {
+      if (!user?.tenant_id) return [];
+      
+      const { data, error } = await supabase
+        .from('services')
+        .select('*')
+        .eq('tenant_id', user.tenant_id)
+        .order('name', { ascending: true });
 
-  const filteredServicos = servicos.filter((servico) =>
-    servico.nome.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+      if (error) throw error;
+      
+      // Converte os nomes das colunas da base de dados para o que o visual espera
+      return data.map((s: any) => ({
+        id: s.id,
+        nome: s.name,
+        preco: Number(s.price),
+        duracao: s.duration_minutes,
+        descricao: s.description || '',
+        ativo: s.is_active,
+      })) as Servico[];
+    },
+    enabled: !!user?.tenant_id,
+  });
+
+  // 2. Filtra os serviços com proteção contra nomes vazios
+  const filteredServicos = servicos.filter((servico) => {
+    const nomeSeguro = servico.nome || '';
+    return nomeSeguro.toLowerCase().includes(searchQuery.toLowerCase());
+  });
+
+  // 3. Salva na base de dados
+  const saveServicoMutation = useMutation({
+    mutationFn: async () => {
+      if (!formData.nome || !formData.preco || !formData.duracao) {
+        throw new Error('Nome, preço e duração são obrigatórios');
+      }
+
+      const serviceData = {
+        tenant_id: user?.tenant_id,
+        name: formData.nome,
+        // Converte vírgula para ponto caso o utilizador digite "45,00"
+        price: parseFloat(formData.preco.replace(',', '.')), 
+        duration_minutes: parseInt(formData.duracao, 10),
+        description: formData.descricao || null,
+        is_active: true,
+      };
+
+      if (editingServico) {
+        const { error } = await supabase
+          .from('services')
+          .update(serviceData)
+          .eq('id', editingServico.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('services')
+          .insert(serviceData);
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['services'] });
+      Alert.alert('Sucesso', 'Serviço salvo com sucesso!');
+      handleCloseModal();
+    },
+    onError: (error: Error) => {
+      Alert.alert('Erro ao salvar', error.message);
+    }
+  });
 
   const handleOpenModal = (servico?: Servico) => {
     if (servico) {
@@ -112,12 +146,7 @@ export default function ServicosScreen() {
   };
 
   const handleSave = () => {
-    if (!formData.nome || !formData.preco || !formData.duracao) {
-      Alert.alert('Erro', 'Nome, preço e duração são obrigatórios');
-      return;
-    }
-    Alert.alert('Sucesso', 'Serviço salvo com sucesso!');
-    handleCloseModal();
+    saveServicoMutation.mutate();
   };
 
   return (

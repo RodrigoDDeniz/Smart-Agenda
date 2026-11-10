@@ -1,3 +1,6 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import React, { useState } from 'react';
 import {
   View,
@@ -35,6 +38,8 @@ type Cliente = {
 
 export default function ClientesScreen() {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [editingCliente, setEditingCliente] = useState<Cliente | null>(null);
@@ -46,40 +51,83 @@ export default function ClientesScreen() {
     endereco: '',
   });
 
-  const [clientes] = useState<Cliente[]>([
-    {
-      id: '1',
-      nome: 'João Silva',
-      telefone: '(11) 98765-4321',
-      email: 'joao@email.com',
-      endereco: 'Rua das Flores, 123',
-      isVip: true,
-      totalAtendimentos: 15,
-      ultimoAtendimento: '2025-01-15',
-    },
-    {
-      id: '2',
-      nome: 'Maria Santos',
-      telefone: '(11) 98765-1234',
-      email: 'maria@email.com',
-      isVip: false,
-      totalAtendimentos: 5,
-      ultimoAtendimento: '2025-01-10',
-    },
-    {
-      id: '3',
-      nome: 'Pedro Costa',
-      telefone: '(11) 98765-5678',
-      isVip: false,
-      totalAtendimentos: 2,
-      ultimoAtendimento: '2025-01-05',
-    },
-  ]);
+  // 1. Vai buscar os clientes reais ao Supabase
+  const { data: clientes = [], isLoading } = useQuery({
+    queryKey: ['clients', user?.tenant_id],
+    queryFn: async () => {
+      if (!user?.tenant_id) return [];
+      
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('tenant_id', user.tenant_id)
+        .order('name', { ascending: true });
 
-  const filteredClientes = clientes.filter((cliente) =>
-    cliente.nome.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    cliente.telefone.includes(searchQuery)
-  );
+      if (error) throw error;
+      
+      // Converte os dados do banco (name, phone) para os nomes que o seu visual já espera (nome, telefone)
+      return data.map((c: any) => ({
+        id: c.id,
+        nome: c.name,
+        telefone: c.phone,
+        email: c.email,
+        endereco: '', 
+        isVip: false, 
+        totalAtendimentos: 0, 
+        ultimoAtendimento: undefined,
+      })) as Cliente[];
+    },
+    enabled: !!user?.tenant_id,
+  });
+
+// 2. Filtra os clientes baseados na pesquisa (agora com proteção contra campos vazios)
+  const filteredClientes = clientes.filter((cliente) => {
+    const nomeSeguro = cliente.nome || '';
+    const telefoneSeguro = cliente.telefone || '';
+    const buscaSegura = searchQuery.toLowerCase();
+    
+    return (
+      nomeSeguro.toLowerCase().includes(buscaSegura) ||
+      telefoneSeguro.includes(searchQuery)
+    );
+  });
+
+  // 3. Função para guardar ou atualizar o cliente na base de dados
+  const saveClientMutation = useMutation({
+    mutationFn: async () => {
+      if (!formData.nome || !formData.telefone) {
+        throw new Error('Nome e telefone são obrigatórios');
+      }
+
+      const clientData = {
+        tenant_id: user?.tenant_id,
+        name: formData.nome,
+        phone: formData.telefone,
+        email: formData.email || null,
+      };
+
+      if (editingCliente) {
+        const { error } = await supabase
+          .from('clients')
+          .update(clientData)
+          .eq('id', editingCliente.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('clients')
+          .insert(clientData);
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      Alert.alert('Sucesso', 'Cliente salvo com sucesso!');
+      handleCloseModal();
+    },
+    onError: (error: Error) => {
+      Alert.alert('Erro ao salvar', error.message);
+    }
+  });
 
   const handleOpenModal = (cliente?: Cliente) => {
     if (cliente) {
@@ -104,12 +152,7 @@ export default function ClientesScreen() {
   };
 
   const handleSave = () => {
-    if (!formData.nome || !formData.telefone) {
-      Alert.alert('Erro', 'Nome e telefone são obrigatórios');
-      return;
-    }
-    Alert.alert('Sucesso', 'Cliente salvo com sucesso!');
-    handleCloseModal();
+    saveClientMutation.mutate();
   };
 
   return (
